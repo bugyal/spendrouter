@@ -9,7 +9,7 @@ description = "Route model calls to the cheapest acceptable spend tier and hold 
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
-authors = [{ name = "coding agent", email = "coding@localhost" }]
+authors = [{ name = "Ashish Bhatt" }]
 keywords = ["llm", "cost", "budget", "router", "quota", "agents"]
 classifiers = [
   "Development Status :: 3 - Alpha",
