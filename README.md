@@ -53,12 +53,24 @@ enforces **hard caps** rather than reporting them.
 
 ## Install
 
+The code needs **Python 3.11+** (`tomllib` from the stdlib — no runtime
+dependencies). On macOS `python3` is frequently the 3.9 system build, whose pip
+is also too old for editable installs, so pick a versioned interpreter:
+
 ```sh
-python3 -m venv .venv && .venv/bin/pip install -e .
+python3.13 -m venv .venv && .venv/bin/pip install -e .
 .venv/bin/spendrouter --help
 ```
 
-Python 3.11+ (uses `tomllib` from the stdlib — no runtime dependencies).
+Check first if you are unsure:
+
+```sh
+python3 -c 'import sys; print(sys.version_info >= (3, 11))'   # want: True
+```
+
+Run the CLI as `.venv/bin/spendrouter` (or activate the venv). Running
+`./src/spendrouter/cli.py` directly will not work — it is a package, and it
+resolves its own imports relatively.
 
 ## Configure
 

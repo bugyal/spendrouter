@@ -30,6 +30,21 @@ Every limit is optional; ``null``/absent means "no cap for this dimension".
 
 from __future__ import annotations
 
+import sys
+
+# tomllib is stdlib only from 3.11. Fail loudly and usefully rather than letting
+# a downstream `import tomllib` raise a bare ModuleNotFoundError somewhere
+# confusing — and note that an old interpreter also comes with an old pip that
+# cannot do PEP 660 editable installs, which is the other half of the trap.
+if sys.version_info < (3, 11):  # pragma: no cover - depends on the interpreter
+    raise RuntimeError(
+        f"spendrouter needs Python 3.11 or newer; this is {sys.version.split()[0]}"
+        f" ({sys.executable}).\n"
+        "Create the environment with a 3.11+ interpreter, e.g.:\n"
+        "    python3.13 -m venv .venv && .venv/bin/pip install -e .\n"
+        "On macOS, `python3` is often the 3.9 system build; pick a versioned name."
+    )
+
 import os
 import tomllib
 from dataclasses import dataclass, field
