@@ -181,10 +181,11 @@ read the decision without parsing prose.
 The suite covers the parts that matter: tier selection and fail-over, the peak
 multiplier pushing a call off the subscription tier, deferred-window
 availability, cap enforcement stopping a runaway job at the right call, estimate
-reconciliation against real token counts, and config validation errors.
+reconciliation against real token counts, config validation errors, and the
+Python-version guard.
 
 ```
-56 passed
+59 passed
 ```
 
 ## License

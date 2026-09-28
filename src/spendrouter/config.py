@@ -33,9 +33,9 @@ from __future__ import annotations
 import sys
 
 # tomllib is stdlib only from 3.11. Fail loudly and usefully rather than letting
-# a downstream `import tomllib` raise a bare ModuleNotFoundError somewhere
-# confusing — and note that an old interpreter also comes with an old pip that
-# cannot do PEP 660 editable installs, which is the other half of the trap.
+# the tomllib import below raise a bare ModuleNotFoundError somewhere confusing —
+# and note that an old interpreter also comes with an old pip that cannot do
+# PEP 660 editable installs, which is the other half of the trap.
 if sys.version_info < (3, 11):  # pragma: no cover - depends on the interpreter
     raise RuntimeError(
         f"spendrouter needs Python 3.11 or newer; this is {sys.version.split()[0]}"
