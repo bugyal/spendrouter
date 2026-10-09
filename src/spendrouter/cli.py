@@ -1,9 +1,19 @@
-"""spendrouter CLI.
+"""spendrouter CLI — one tool, two layers.
+
+ROUTE, before a call (needs a config with models and projects):
 
     spendrouter route   --project work --model claude-opus-5 --tokens 200000 [--dry-run|--commit]
     spendrouter plan    --project work --model m --tokens N --calls 12
     spendrouter ledger  [--project work] [--days 7]
     spendrouter status  [--project work]
+    spendrouter caps    [--project work]
+
+CONTAIN, while agents run (the verbs live in cli_contain.py):
+
+    spendrouter serve   [--listen 127.0.0.1:8787]
+    spendrouter run     --agent support-bot [--customer acme] -- python agent.py
+    spendrouter creds   mint | list | revoke | gc
+    spendrouter report | check | pause | resume | init
 """
 
 from __future__ import annotations
@@ -15,7 +25,7 @@ import os
 import sys
 import time
 
-from . import __version__
+from . import __version__, cli_contain
 from .config import ConfigError, load_config
 from .ledger import WEEK_SECONDS, Ledger
 from .policy import CapExceeded, Decision, commit, enforce, route
@@ -87,12 +97,21 @@ def _token_args(parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="spendrouter",
-        description="Route model calls to the cheapest acceptable spend tier and hold the line on hard caps.",
+        description="One agent-spend tool. ROUTE: send each call to the cheapest acceptable spend tier "
+        "and refuse it when it would break a cap. CONTAIN: meter, cap and circuit-break running agents "
+        "behind a local proxy (spendrouter serve).",
+        epilog="exit codes: 0 ok · 1 error · 2 usage · 3 refused / hard cap reached · 4 config error · "
+        "5 paused · 6 soft cap exceeded",
     )
     parser.add_argument("--version", action="version", version=f"spendrouter {__version__}")
     # Config/db are top-level so they can precede the subcommand. Subcommand-
     # local copies would fight over defaults, so they live here only.
-    parser.add_argument("--config", "-c", default=None, help="config TOML path")
+    parser.add_argument(
+        "--config",
+        "-c",
+        default=None,
+        help="config file (default: $SPENDROUTER_CONFIG, then ./spendrouter.yml; a 0.1 spendrouter.toml still loads)",
+    )
     parser.add_argument("--db", default=None, help="override ledger sqlite path")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -132,6 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
     cap_p = sub.add_parser("caps", help="show the caps configured for a project")
     _add_common(cap_p)
 
+    cli_contain.add_commands(sub)
     return parser
 
 
@@ -468,6 +488,9 @@ def cmd_caps(args, config) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if getattr(args, "contain", None) is not None:
+        # The contain verbs load their own config: they also run without a file.
+        return cli_contain.run(args)
     try:
         config = load_config(args.config)
     except ConfigError as exc:

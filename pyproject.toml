@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "spendrouter"
-version = "0.1.0"
-description = "Route model calls to the cheapest acceptable spend tier and hold the line on hard caps."
+version = "0.2.0"
+description = "One agent-spend tool: route each call to the cheapest acceptable spend tier, and contain running agents behind a metering, capping proxy."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
 authors = [{ name = "Ashish Bhatt" }]
-keywords = ["llm", "cost", "budget", "router", "quota", "agents"]
+keywords = ["llm", "cost", "budget", "router", "quota", "agents", "proxy", "circuit-breaker"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
@@ -24,7 +24,8 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+# pyyaml is only used by tests that cross-check the built-in YAML parser.
+dev = ["pytest>=8.0", "pyyaml>=6.0"]
 
 [project.scripts]
 spendrouter = "spendrouter.cli:main"
