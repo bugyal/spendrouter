@@ -1,0 +1,144 @@
+# spendrouter.yml — one config for both layers of spendrouter.
+#
+#   ROUTE    before a call: which tier pays for it, and per-project hard caps
+#            that refuse it before it starts (route, plan, status, ledger, caps).
+#   CONTAIN  during a run: `spendrouter serve` sits between agents and the
+#            provider, meters every real call, trips a loop circuit breaker,
+#            and refuses calls over a hard cap before they reach the provider.
+#
+# Unknown keys are rejected, so a typo cannot silently disable a cap.
+# Prices are illustrative — put your own plan's numbers in.
+
+# One sqlite ledger for both layers: routed calls and proxied calls. The
+# contain event log (events.jsonl) is written next to it.
+db_path: ~/.local/share/spendrouter/ledger.sqlite3
+
+# ============================== ROUTE ==============================
+
+default_project: work
+quota_unit_value_usd: 0.02   # what one subscription quota unit is worth to you
+
+# How each model is priced on each tier:
+#   subscription: quota_per_1k = quota units burned per 1k tokens
+#   deferred / payg: usd_per_mtok = dollars per million tokens
+#   local: true = on-box inference, zero marginal cost
+models:
+  claude-opus-5:
+    subscription: {quota_per_1k: 4.0}
+    deferred: {usd_per_mtok: 1.20}
+    payg: {usd_per_mtok: 15.00}
+  claude-sonnet-5:
+    subscription: {quota_per_1k: 1.6}
+    deferred: {usd_per_mtok: 0.60}
+    payg: {usd_per_mtok: 3.00}
+  glm-5.3-flash:
+    subscription: {quota_per_1k: 0.2}
+    payg: {usd_per_mtok: 0.30}
+  qwen3-coder-30b-local:
+    local: true
+
+# Budgets, tier order, and when each tier is cheap. Peak hours and deferred
+# windows are read in this machine's local time.
+projects:
+  work:
+    allowed_models: [claude-opus-5, claude-sonnet-5, glm-5.3-flash, qwen3-coder-30b-local]
+    tier_order: [subscription, deferred, payg, local]
+    hourly_usd: 5.00
+    weekly_usd: 40.00
+    hourly_quota: 500.0
+    weekly_quota: 4000.0
+    deferred_budget_usd: 25.00
+    # Peak hours: the same work burns ~3-4x subscription quota.
+    peak_hours: [9, 10, 11, 12, 13, 14, 15, 16, 17]
+    peak_multiplier: 3.5
+    # Deferred spend is only purchasable inside these windows, at a discount.
+    deferred_windows: ["00:00-06:00", "22:00-23:59"]
+    deferred_multiplier: 0.5
+  hobby:
+    allowed_models: [glm-5.3-flash, qwen3-coder-30b-local]
+    tier_order: [local, subscription, payg]
+    weekly_quota: 1000.0
+    hourly_usd: 1.00
+
+# ============================= CONTAIN =============================
+
+# Budget periods (hour/day/week/month) roll over in this zone: utc | local
+timezone: utc
+
+proxy:
+  listen: 127.0.0.1:8787
+  # true: only spendrouter credentials (sr_...) are accepted.
+  # false: agents may also send their own provider key + X-Spendrouter-* tags.
+  require_credential: false
+  # Ask OpenAI-style streams to report usage (stream_options.include_usage).
+  inject_stream_usage: true
+  upstream_timeout: 600
+
+# Requests to /<name>/... go to base_url. openai and anthropic are built in.
+# api_key_env names the variable in the `spendrouter serve` environment that
+# holds the real key swapped in for a spendrouter credential.
+upstreams:
+  openai:
+    base_url: https://api.openai.com
+    api_key_env: OPENAI_API_KEY
+  anthropic:
+    base_url: https://api.anthropic.com
+    api_key_env: ANTHROPIC_API_KEY
+  # openrouter:
+  #   base_url: https://openrouter.ai/api
+  #   format: openai
+  #   api_key_env: OPENROUTER_API_KEY
+
+breaker:
+  enabled: true
+  max_repeats: 10             # same tool, same error class: the 11th in a row pauses the agent
+  api_error_repeats: 20       # same upstream error (e.g. http_500): the 21st in a row pauses
+  max_identical_requests: 10  # byte-identical request: the 11th send pauses
+  window_seconds: 3600        # failures older than this are forgotten
+  cooldown_seconds: 0         # 0 = stay paused until `spendrouter resume`
+
+# Hard caps refuse with 402 before the provider is called; soft caps alert
+# once per period. scope: agent | customer | task | global.
+budgets:
+  # Each customer separately: alert at $5/day, refuse at $15/day.
+  - scope: customer
+    match: "*"
+    period: day
+    soft_usd: 5
+    hard_usd: 15
+  # One customer's monthly plan: pause (a human decides) at $400.
+  - scope: customer
+    match: acme
+    period: month
+    soft_usd: 300
+    hard_usd: 400
+    action: pause
+  # Each agent: alert at $20/day.
+  - scope: agent
+    match: "*"
+    period: day
+    soft_usd: 20
+  # Everything together: the last-resort kill switch.
+  - scope: global
+    period: day
+    hard_usd: 200
+    action: pause
+
+# Provider list prices for metering proxied calls, USD per 1M tokens; adds to
+# / overrides the built-in table. (models: above is your plan's routing
+# prices; this is what the provider bills.) "default" is charged for unknown
+# models — high on purpose: over-count, never under-count.
+pricing:
+  # my-finetune:
+  #   input: 3.0
+  #   output: 12.0
+  default:
+    input: 15.0
+    output: 75.0
+
+# Event JSON arrives on stdin; SPENDROUTER_EVENT and SPENDROUTER_TEXT are set.
+hooks:
+  # - events: [breaker_tripped, hard_cap_exceeded, paused]
+  #   command: ["/usr/local/bin/page-oncall"]
+  # - events: [soft_cap_exceeded]
+  #   url: http://127.0.0.1:9000/spendrouter
