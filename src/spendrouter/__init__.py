@@ -1,10 +1,13 @@
-"""spendrouter — route model calls to the cheapest acceptable spend tier.
+"""spendrouter — one agent-spend tool, in two layers.
 
-Treats subscription quota as the cheapest tier, deferred spend as a scarce
-budget, and pay-as-you-go as the last resort. Tracks quota + spend in a local
-sqlite ledger and refuses to start work that would break a hard cap.
+ROUTE, before a call: subscription quota is the cheapest tier, deferred spend
+a scarce budget, pay-as-you-go the last resort; work that would break a hard
+cap is refused before it starts. CONTAIN, while agents run: ``spendrouter
+serve`` meters every real call, trips a circuit breaker on loops, refuses
+calls over a hard cap before they reach the provider, and hands agents
+scoped, expiring ``sr_`` credentials. One sqlite ledger, stdlib only.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = ["__version__"]
