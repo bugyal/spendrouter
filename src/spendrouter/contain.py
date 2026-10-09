@@ -339,25 +339,33 @@ class Containment:
                 )
         return None
 
-    def _check_api_errors(self, attr: Attribution, upstream: str, error_cls: str, now: float) -> None:
+    def _check_api_errors(self, attr: Attribution, upstream: str, endpoint: str, error_cls: str, now: float) -> None:
         threshold = self.config.breaker.api_error_repeats
         if not threshold or not self.config.breaker.enabled:
             return
+        # A streak is one endpoint failing with one error class. Keyed per
+        # endpoint, a chat loop that keeps failing still trips while the
+        # agent's model listings succeed in between; only a success on the
+        # failing endpoint itself ends the streak.
         floor = self._breaker_floor(attr.agent, now)
         last_ok = self.store.scalar(
-            "SELECT MAX(ts) FROM calls WHERE agent = ? AND upstream = ? AND outcome = 'ok'", (attr.agent, upstream)
+            "SELECT MAX(ts) FROM calls WHERE agent = ? AND upstream = ? AND endpoint = ? AND outcome = 'ok'",
+            (attr.agent, upstream, endpoint),
         )
         count = self.store.scalar(
-            "SELECT COUNT(*) FROM calls WHERE agent = ? AND upstream = ? AND outcome = 'error' AND error_class = ? AND ts > ?",
-            (attr.agent, upstream, error_cls, max(floor, last_ok or 0.0)),
+            "SELECT COUNT(*) FROM calls WHERE agent = ? AND upstream = ? AND endpoint = ? AND outcome = 'error' "
+            "AND error_class = ? AND ts > ?",
+            (attr.agent, upstream, endpoint, error_cls, max(floor, last_ok or 0.0)),
         )
         if count > threshold and self.active_pause(attr, now) is None:
+            where = f"upstream {upstream!r}" + (f" {endpoint}" if endpoint else "")
             self._trip(
                 attr,
                 now,
                 signal="api_errors",
-                detail=f"upstream {upstream!r} failed {count}x in a row with {error_cls}",
-                tool=f"api:{upstream}",
+                detail=f"{where} failed {count}x in a row with {error_cls}",
+                tool=f"api:{upstream}{endpoint}",
+                endpoint=endpoint,
                 error_class=error_cls,
                 count=count,
                 threshold=threshold,
@@ -623,7 +631,7 @@ class Containment:
                 tool_error=tool_error,
             )
             if outcome == "error":
-                self._check_api_errors(attr, upstream, error_class, now)
+                self._check_api_errors(attr, upstream, endpoint, error_class, now)
             if cost > 0:
                 for state in self.budget_states(attr, now):
                     if state.level == "hard":

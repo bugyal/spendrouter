@@ -257,3 +257,71 @@ def test_chunked_request_body_is_accepted(make_proxy):
     finally:
         conn.close()
     assert env.upstream.requests[-1]["body"] == CHAT
+
+
+# -- non-inference endpoints run no model: zero tokens, zero cost, never estimated --
+
+# A polled OpenAI batch object carries the whole batch's usage; billing it per
+# poll would charge the batch again on every status check.
+BATCH_POLL = {
+    "id": "batch_1",
+    "object": "batch",
+    "endpoint": "/v1/chat/completions",
+    "status": "completed",
+    "usage": {
+        "input_tokens": 50_000,
+        "output_tokens": 20_000,
+        "total_tokens": 70_000,
+        "input_tokens_details": {"cached_tokens": 0},
+        "output_tokens_details": {"reasoning_tokens": 0},
+    },
+}
+
+
+@pytest.mark.parametrize(
+    "method, path, body, reply",
+    [
+        ("POST", "/v1/files", {"purpose": "batch"}, {"id": "file-1", "object": "file", "bytes": 120, "purpose": "batch"}),
+        ("DELETE", "/v1/files/file-1", None, {"id": "file-1", "object": "file", "deleted": True}),
+        (
+            "POST",
+            "/v1/batches",
+            {"input_file_id": "file-1", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+            {"id": "batch_1", "object": "batch", "status": "validating"},
+        ),
+        ("GET", "/v1/batches/batch_1", None, BATCH_POLL),
+        (
+            "POST",
+            "/v1/fine_tuning/jobs",
+            {"model": "gpt-4o-mini", "training_file": "file-1"},
+            {"id": "ftjob-1", "object": "fine_tuning.job", "model": "gpt-4o-mini", "status": "queued"},
+        ),
+        ("POST", "/v1/fine_tuning/jobs/ftjob-1/cancel", None, {"id": "ftjob-1", "object": "fine_tuning.job", "status": "cancelled"}),
+        ("POST", "/v1/messages/count_tokens", MESSAGES, {"input_tokens": 14}),
+        ("POST", "/v1/messages/batches", {"requests": []}, {"id": "msgbatch_1", "type": "message_batch", "processing_status": "in_progress"}),
+    ],
+)
+def test_non_inference_endpoints_are_metered_at_zero(make_proxy, method, path, body, reply):
+    env = make_proxy()
+    env.upstream.canned[(method, path)] = (200, reply)
+    name = "anthropic" if path.startswith("/v1/messages") else "openai"
+    status, _, _ = http_call(env.url, method, f"/{name}{path}", body, {"X-Spendrouter-Agent": "ops"})
+    assert status == 200
+    (call,) = rows(env.engine)
+    assert (call["outcome"], call["endpoint"]) == ("ok", path)
+    assert (call["input_tokens"], call["output_tokens"], call["cost_usd"], call["estimated"]) == (0, 0, 0.0, 0)
+
+
+def test_api_error_breaker_counts_identical_endpoint_and_error(make_proxy):
+    """A failing chat loop trips even when the agent's model listings succeed in between."""
+    env = make_proxy({"breaker": {"api_error_repeats": 2}})
+    env.upstream.failing["/v1/chat/completions"] = 500
+    headers = {"X-Spendrouter-Agent": "flaky", "Authorization": "Bearer sk-x"}
+    chats, listings = [], []
+    for i in range(4):
+        chats.append(http_call(env.url, "POST", "/openai/v1/chat/completions", dict(CHAT, n=i), headers)[0])
+        listings.append(http_call(env.url, "GET", "/openai/v1/models", headers=headers)[0])
+    assert chats == [500, 500, 500, 423]  # the third identical failure trips the breaker
+    assert listings == [200, 200, 423, 423]  # and the paused agent is refused everything
+    (trip,) = [json.loads(r["data"]) for r in env.engine.store.query("SELECT data FROM contain_events WHERE kind = 'breaker_tripped'")]
+    assert (trip["endpoint"], trip["error_class"]) == ("/v1/chat/completions", "http_500")

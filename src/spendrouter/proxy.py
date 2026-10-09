@@ -41,12 +41,24 @@ from .credentials import PREFIX, Credential
 from .toolscan import scan_request
 from .usage import StreamMeter, TokenUsage, parse_response
 
-__all__ = ["HEALTH_PATH", "ProxyServer", "presented_key"]
+__all__ = ["HEALTH_PATH", "ProxyServer", "is_inference", "presented_key"]
 
 HEALTH_PATH = "/_spendrouter/health"
 
-# Endpoints that never run a model: metered with zero tokens/cost.
-NON_INFERENCE_ENDPOINTS = {"/v1/models", "/v1/files", "/v1/fine_tuning/jobs", "/v1/batches"}
+# Calls that never run a model. They are ledgered like any other call but
+# metered at zero tokens and $0: their bodies are listings, uploads and job
+# objects, and a polled batch even echoes the whole batch's usage, so reading
+# or estimating a cost from them would bill the same work again on every poll.
+# Each endpoint covers its sub-resources (/v1/files/<id>, /v1/batches/<id>/cancel).
+NON_INFERENCE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "DELETE"})
+NON_INFERENCE_ENDPOINTS = (
+    "/v1/models",
+    "/v1/files",
+    "/v1/fine_tuning/jobs",
+    "/v1/batches",
+    "/v1/messages/count_tokens",  # Anthropic: token counting is free
+    "/v1/messages/batches",  # Anthropic: batches are created and polled here, billed per result
+)
 TAG_PREFIX = "x-spendrouter-"
 MAX_BODY = 64 * 1024 * 1024
 HOP_BY_HOP = frozenset(
@@ -64,6 +76,13 @@ HOP_BY_HOP = frozenset(
     }
 )
 _AUTH_HEADERS = ("x-api-key", "api-key", "authorization")
+
+
+def is_inference(method: str, endpoint: str) -> bool:
+    """Whether a call can run a model, and so has a cost to meter."""
+    if method.upper() in NON_INFERENCE_METHODS:
+        return False
+    return not any(endpoint == e or endpoint.startswith(e + "/") for e in NON_INFERENCE_ENDPOINTS)
 
 
 def presented_key(headers: Any) -> str:
@@ -429,12 +448,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
         elif meter is not None and meter.error_type:
             outcome, error_cls = "error", f"stream_{meter.error_type}"
 
-        # Non-inference calls (GET, or a listing endpoint like /v1/models) carry
-        # no usage block by design — meter them at zero rather than estimating
-        # a cost for a call that ran no model.
-        inference_call = self.command != "GET" and endpoint not in NON_INFERENCE_ENDPOINTS
         estimated = False
-        if not usage.found and inference_call and (outcome == "ok" or (meter is not None and meter.text_chars)):
+        if not is_inference(self.command, endpoint):
+            usage = TokenUsage()  # ran no model: zero, whatever usage the body echoes
+        elif not usage.found and (outcome == "ok" or (meter is not None and meter.text_chars)):
             # No usage block (a provider that omits it, a cut-off stream): estimate
             # ~4 chars/token rather than record a free call. Flagged in reports.
             usage = TokenUsage(input_tokens=len(request_body) // 4, output_tokens=response_chars // 4)

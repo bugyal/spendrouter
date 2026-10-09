@@ -37,13 +37,17 @@ ANTHROPIC_USAGE = {
 class FakeUpstream:
     """Speaks just enough OpenAI Chat/Responses and Anthropic Messages, JSON and SSE.
 
-    ``fail_status`` makes every request fail with that status. Each request
-    is recorded with lower-cased headers and the decoded JSON body.
+    ``fail_status`` makes every request fail with that status; ``failing``
+    maps a path to the status it fails with; ``canned`` maps (method, path) to
+    a (status, JSON body) reply. Each request is recorded with lower-cased
+    headers and the decoded JSON body.
     """
 
     def __init__(self) -> None:
         self.requests: list[dict[str, Any]] = []
         self.fail_status: int | None = None
+        self.failing: dict[str, int] = {}
+        self.canned: dict[tuple[str, str], tuple[int, dict[str, Any]]] = {}
         self._lock = threading.Lock()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.server.daemon_threads = True
@@ -74,8 +78,11 @@ class FakeUpstream:
                     fake.requests.append(
                         {"method": self.command, "path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": body}
                     )
-                if fake.fail_status:
-                    return self._json(fake.fail_status, {"error": {"type": "server_error", "message": "boom"}})
+                failure = fake.fail_status or fake.failing.get(self.path)
+                if failure:
+                    return self._json(failure, {"error": {"type": "server_error", "message": "boom"}})
+                if (self.command, self.path) in fake.canned:
+                    return self._json(*fake.canned[(self.command, self.path)])
                 if self.path == "/v1/models":
                     return self._json(200, {"object": "list", "data": [{"id": "gpt-4o"}]})
                 model = (body or {}).get("model", "")
@@ -122,7 +129,7 @@ class FakeUpstream:
                     )
                 return self._json(404, {"error": {"message": "no such path"}})
 
-            do_POST = do_GET
+            do_POST = do_DELETE = do_GET
 
             def _json(self, status: int, payload: dict[str, Any]) -> None:
                 data = json.dumps(payload).encode()
